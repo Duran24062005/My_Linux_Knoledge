@@ -1,77 +1,175 @@
-# ¿Cuales son las diferencias entre Memory y Swap?
+# Acción: crear, verificar y retirar un archivo Swap
 
-La **Memory (Memoria RAM)** es el componente de hardware físico de acceso ultrarrápido donde el procesador almacena los datos y las instrucciones de las aplicaciones que se están ejecutando activamente. En la captura proporcionada, esta memoria física corresponde a dos módulos DDR4 en formato SODIMM funcionando a 3200 MT/s. Su lectura y escritura son inmediatas, pero su capacidad es limitada y su contenido se borra al apagar el equipo.
+## Objetivo
 
-El **Swap (Espacio de Intercambio)** es una porción del disco de almacenamiento (ya sea un archivo o una partición en tu SSD/HDD) que el sistema operativo utiliza como una extensión virtual de la RAM. Cuando la RAM física empieza a llenarse, el kernel de Linux traslada los datos de las aplicaciones en segundo plano o menos activas hacia el Swap para liberar espacio rápido para los procesos prioritarios. Debido a que el Swap reside en el disco, su velocidad es drásticamente inferior a la de la RAM.
+Aumentar temporalmente o de forma persistente el espacio Swap mediante un
+archivo, sin modificar particiones. También explica cómo retirarlo de forma
+segura.
 
-**Análisis del estado actual en `image_14989a.png`:**
+## Cuándo utilizarla
 
-* **Saturación del sistema:** La gráfica muestra un pico repentino donde el Swap alcanzó rápidamente su límite máximo, quedando al 100% de uso (4.29 GB ocupados de 4.29 GB disponibles).
+Cuando la memoria RAM se agota con frecuencia y necesitas una válvula adicional
+para cargas puntuales. Swap no sustituye RAM ni corrige por sí sola una fuga de
+memoria o un proceso descontrolado.
 
+## Compatibilidad, privilegios y riesgo
 
-* **Alta demanda física:** Simultáneamente, la memoria RAM se encuentra operando al 84% de su capacidad (13.80 GB en uso de un total de 16.52 GB).
+- **Compatibilidad:** Linux con `util-linux`, archivo en un filesystem adecuado
+  y soporte de `swapon`.
+- **Referencia:** Ubuntu LTS; las órdenes de activación son comunes en muchas
+  distribuciones.
+- **Privilegio:** root mediante `sudo`.
+- **Riesgo:** cambio persistente en almacenamiento y `/etc/fstab`; retirar un
+  archivo activo puede provocar un fallo.
 
+## Distinción importante
 
-* **Impacto en el rendimiento:** Tener el Swap al 100% indica que el sistema se ha quedado sin "válvula de escape" para la memoria virtual. En un entorno de desarrollo Linux, levantar múltiples contenedores Docker, bases de datos o procesos de compilación en este estado generará ralentizaciones severas (thrashing), ya que el sistema pierde ciclos de CPU moviendo datos entre el disco y la RAM de forma constante. Si el consumo de memoria de los procesos continúa aumentando, el *OOM Killer* (Out of Memory Killer) del sistema operativo intervendrá para cerrar forzosamente las aplicaciones más pesadas y evitar un colapso total del sistema.
+- Una **partición Swap** es un dispositivo o partición formateada con
+  `mkswap`.
+- Un **archivo Swap** es un archivo regular reservado para el kernel.
+- Una entrada en `/etc/fstab` hace persistente la activación. En sistemas con
+  systemd puede aparecer una unidad `.swap` generada a partir de esa entrada.
+- Swap usada al 100% no demuestra por sí sola que haya un fallo; revisa RAM,
+  presión, I/O y procesos.
 
----
+## Inspección previa
 
-## ¿Cómo puedo asignarle mas espacio a la memoria swap de mi laptop?
+Elige una ruta y tamaño concretos. No continúes si el archivo ya existe:
 
-La forma más segura y rápida de agregar espacio Swap en Linux sin arriesgarte a modificar particiones de disco es creando un archivo de intercambio adicional (swapfile) y sumándolo al que ya tienes.
-
-Sigue estos pasos en tu terminal para añadir 8 GB extra de Swap:
-
-1. **Crear el archivo de intercambio:**
-Asignaremos un bloque de 8 GB en la raíz del sistema.
-```bash
-sudo fallocate -l 8G /swapfile_extra
-
-```
-
-
-*Verificación: Ejecuta `ls -lh /swapfile_extra` para confirmar que el archivo se creó con un peso de 8.0G.*
-2. **Ajustar los permisos de seguridad:**
-Solo el sistema (root) debe tener acceso de lectura y escritura a este archivo para evitar vulnerabilidades.
-```bash
-sudo chmod 600 /swapfile_extra
-
-```
-
-
-*Verificación: Ejecuta `ls -l /swapfile_extra` y asegúrate de que los permisos al inicio de la línea sean exactamente `-rw-------`.*
-3. **Formatear el archivo como espacio Swap:**
-Prepara el archivo para que el kernel lo reconozca como memoria virtual.
-```bash
-sudo mkswap /swapfile_extra
-
-```
-
-
-*Verificación: La terminal imprimirá un mensaje confirmando que se configuró el swapspace y te mostrará un UUID generado.*
-4. **Activar el nuevo Swap:**
-Enciende el archivo para que el sistema comience a utilizarlo de inmediato.
-```bash
-sudo swapon /swapfile_extra
-
-```
-
-
-5. **Confirmar la capacidad total:**
-Revisa que el sistema ahora sume los 4.29 GB originales más los nuevos 8 GB.
 ```bash
 free -h
-
+swapon --show --output=NAME,TYPE,SIZE,USED,PRIO
+cat /proc/swaps
+grep -nE '(^|[[:space:]])swap([[:space:]]|$)' /etc/fstab
+systemctl list-units --type=swap --all
+df -hT /
+test -e /swapfile_extra && printf 'La ruta ya existe\n'
 ```
 
+Confirma que `/` tiene espacio, que no hay una entrada para
+`/swapfile_extra` y que el filesystem permite el método escogido. En Btrfs,
+NFS, contenedores o entornos administrados por un proveedor pueden existir
+restricciones específicas.
 
-*Verificación: La fila "Swap:" debería mostrar un total cercano a los 12 GB. También puedes ejecutar `swapon --show` para ver ambos orígenes trabajando en paralelo.*
-6. **Hacer el cambio permanente (Recomendado):**
-Si reinicias tu equipo ahora, este swap adicional desaparecerá. Para que se monte automáticamente en cada inicio, debes registrarlo en la tabla del sistema de archivos.
+## Respaldo y precauciones
+
+Guarda una copia de `fstab` antes de editarla:
+
 ```bash
-echo '/swapfile_extra none swap sw 0 0' | sudo tee -a /etc/fstab
-
+sudo cp -a /etc/fstab "/etc/fstab.bak.$(date +%Y%m%d-%H%M%S)"
 ```
 
+Usa una segunda sesión si el equipo está bajo presión de memoria. No ejecutes
+`swapoff` sobre el único Swap activo sin comprobar que la RAM disponible puede
+absorber las páginas trasladadas.
 
-*Verificación: Ejecuta `cat /etc/fstab` y revisa que la línea `/swapfile_extra none swap sw 0 0` aparezca al final del archivo.*
+## Ejecución
+
+### Crear y activar el archivo
+
+Este ejemplo crea 8 GiB en `/swapfile_extra`:
+
+```bash
+sudo fallocate -l 8G /swapfile_extra
+sudo chmod 600 /swapfile_extra
+sudo mkswap /swapfile_extra
+sudo swapon /swapfile_extra
+```
+
+Si `fallocate` produce un archivo con agujeros que `swapon` rechaza, consulta
+la documentación del filesystem y usa un método alternativo adecuado para ese
+entorno. No improvises con un archivo que no haya sido verificado.
+
+## Hacerlo persistente sin duplicar fstab
+
+Comprueba la línea exacta y añádela solo si no existe:
+
+```bash
+grep -Fqx '/swapfile_extra none swap sw 0 0' /etc/fstab || \
+  printf '%s\n' '/swapfile_extra none swap sw 0 0' | sudo tee -a /etc/fstab
+sudo findmnt --verify
+sudo systemctl daemon-reload
+```
+
+La orden no debe producir una segunda línea idéntica. Si `findmnt --verify`
+informa errores, detén el procedimiento y corrige `fstab` antes de reiniciar.
+
+## Verificación
+
+```bash
+ls -lh /swapfile_extra
+stat -c '%A %a %U:%G %n' /swapfile_extra
+swapon --show --output=NAME,TYPE,SIZE,USED,PRIO
+free -h
+systemctl list-units --type=swap --all
+```
+
+Debes ver el archivo activo y el total Swap incrementado. Los permisos deben
+ser restrictivos, normalmente `-rw-------`, y el propietario debe ser root.
+
+Para probar persistencia sin reiniciar, valida la configuración con
+`findmnt --verify`; no reinicies un equipo productivo solo para probar una
+línea no revisada de `fstab`.
+
+### Retirar el archivo
+
+Retíralo solo si confirmas que no está siendo usado y que existe otra capacidad
+de memoria suficiente:
+
+```bash
+swapon --show
+free -h
+sudo swapoff /swapfile_extra
+swapon --show
+```
+
+Después elimina únicamente la línea exacta de `fstab` y valida:
+
+```bash
+sudo sed -i '\|^/swapfile_extra none swap sw 0 0$|d' /etc/fstab
+sudo findmnt --verify
+sudo systemctl daemon-reload
+sudo rm -- /swapfile_extra
+```
+
+Si `swapoff` falla por falta de memoria, no borres el archivo: libera memoria,
+añade otra Swap o planifica una ventana de mantenimiento.
+
+## Rollback
+
+Si la activación falló antes de escribir en `fstab`, desactiva y elimina el
+archivo solo si quedó creado:
+
+```bash
+sudo swapoff /swapfile_extra 2>/dev/null || true
+```
+
+Si el cambio persistente quedó mal, restaura la copia de `fstab` elegida tras
+comparar su contenido con la versión actual:
+
+```bash
+sudo cp -a /etc/fstab.bak.<marca> /etc/fstab
+sudo findmnt --verify
+sudo systemctl daemon-reload
+```
+
+Sustituye `<marca>` por el nombre real del respaldo; no uses un comodín sin
+confirmar el archivo exacto.
+
+## Errores frecuentes
+
+- `swapon: <archivo> is busy`: el archivo ya está activo; revisa `swapon --show`.
+- `Invalid argument`: el filesystem o el archivo no cumple las condiciones de
+  Swap; consulta el método apropiado.
+- `Permission denied`: faltan privilegios o los permisos del archivo son
+  inseguros.
+- `No space left on device`: libera espacio o elige un tamaño menor; no llenes
+  completamente `/`.
+- Se duplica una unidad `.swap`: revisa `/etc/fstab`, `systemctl list-units`
+  y las configuraciones generadas antes de volver a activar.
+
+## Fuentes
+
+- [Ubuntu storage documentation](https://ubuntu.com/server/docs/how-to/storage/)
+- [Ubuntu swapon and swapoff manpage](https://manpages.ubuntu.com/manpages/noble/man8/swapon.8.html)
+- [Ask Ubuntu swap discussions](https://askubuntu.com/questions/tagged/swap)
